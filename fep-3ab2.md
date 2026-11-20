@@ -1,10 +1,10 @@
 ---
 slug: "3ab2"
+type: implementation
 authors: Steve Bate <svc-fep@stevebate.net>
 status: DRAFT
-discussionsTo: https://codeberg.org/steve-bate/fep/issues
+discussionsTo: https://github.com/steve-bate/fep-3ab2-event-streaming-api/issues
 dateReceived: 2026-03-14
-trackingIssue: https://codeberg.org/fediverse/fep/issues/778
 ---
 
 # FEP-3ab2: ActivityPub Event Streaming API
@@ -22,7 +22,7 @@ Goals:
 
 This FEP specifies a lightweight, cookie-authenticated [**Server-Sent Events (SSE)**][SSE] streaming API that ActivityPub server implementations can expose to their authenticated clients. The API provides:
 
-1. A **session-control sub-API** for issuing and revoking short-lived, singoe-use streaming tickets, and for managing per-user topic subscriptions.
+1. A **session-control sub-API** for issuing and revoking short-lived, single-use streaming tickets, and for managing per-user topic subscriptions.
 2. A **stream endpoint** that delivers a multiplexed, real-time event feed for all topics the authenticated to which the user is subscribed.
 
 The design intentionally separates *authentication* (handled by the server's existing mechanism, e.g. [OAuth 2.0][OAUTH2], session cookies, or HTTP Basic) from *streaming authorization* (a short-lived ticket stored in an `HttpOnly` cookie), so that the SSE connection never carries user credentials.
@@ -58,9 +58,9 @@ The streaming control endpoint is exposed using the [ActivityPub] Actor `endpoin
   "type": "Person",
   "id": "https://server.example/actor/1",
   ...
-  "endpoints": [
+  "endpoints": {
     "streamingControl": "https://server.example/streaming/control"
-  ]
+  }
 }
 ```
 
@@ -151,7 +151,7 @@ Requires: authenticated Principal. The ticket cookie is read if present.
 The server:
 1. Invalidates the ticket.
 2. Sends a `Set-Cookie` header that clears the cookie (`Max-Age=0`).
-3. Returns `204 No Content` if successfull.
+3. Returns `204 No Content` if successful.
 
 Client implementations SHOULD also close any active SSE connections associated with the revoked ticket.
 
@@ -185,8 +185,8 @@ Violating either condition MUST result in `401 Unauthorized`.
 ```json
 {
   "topics": [
-    "remote-server.example/note/abcd"
-    "server.example/note/#",
+    "remote-server.example/note/abcd",
+    "server.example/note/#"
   ]
 }
 ```
@@ -200,7 +200,7 @@ Violating either condition MUST result in `401 Unauthorized`.
 ```json
 {
   "topics": [
-    "remote-server.example/note/abcd"
+    "remote-server.example/note/abcd",
     "server.example/note/#",
     "server.example/another-topic"
   ]

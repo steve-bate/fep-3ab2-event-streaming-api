@@ -4,7 +4,6 @@ type: implementation
 authors: Steve Bate <svc-fep@stevebate.net>
 status: DRAFT
 discussionsTo: https://github.com/steve-bate/fep-3ab2-event-streaming-api/issues
-dateReceived: 2026-03-14
 ---
 
 # FEP-3ab2: ActivityPub Event Streaming API

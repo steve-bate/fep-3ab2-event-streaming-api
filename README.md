@@ -1,6 +1,6 @@
 # FEP-3ab2: ActivityPub Event Streaming API
 
-**Status:** DRAFT · **Type:** implementation · **Author:** Steve Bate · **Received:** 2026-03-14
+**Status:** DRAFT · **Type:** implementation · **Author:** Steve Bate
 
 ## Overview
 

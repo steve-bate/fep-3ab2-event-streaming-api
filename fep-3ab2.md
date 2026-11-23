@@ -168,6 +168,8 @@ All subscription endpoints require both:
 
 Missing either condition MUST result in `401 Unauthorized`, with the problem type given in the Errors section.
 
+A subscription selects which topics a Principal receives events for. It does not affect whether the Principal may see them. A server MUST reject a `POST {subscriptions_url}` that names a topic the Principal is not entitled to observe with `403 Forbidden`, or accept the subscription and withhold delivery for that topic.
+
 ### List Subscriptions — `GET {subscriptions_url}`
 
 **Response:**
@@ -350,7 +352,7 @@ Servers SHOULD send periodic SSE heartbeat events (`event: heartbeat`) to preven
 The SSE stream may carry sensitive information (notifications, timeline events). Implementations MUST:
 - Restrict stream access to the owning Principal.
 - Limit streaming events to content that the Principal is authorized to view.
-- Not include events from topics the Principal has not explicitly subscribed to.
+- Include events only for topics the Principal is entitled to observe and has subscribed to.
 - Consider data minimization: deliver only the fields necessary for the client's use case.
 
 ## Implementations

@@ -175,6 +175,8 @@ A subscription selects which topics a Principal receives events for. It does not
 
 A ticket that has been used to open a stream remains valid for subscription management until it expires or is revoked.
 
+Subscriptions belong to the Principal. They apply to every subsequent ticket and stream until removed, and creating a new session MUST NOT clear or change them.
+
 ### List Subscriptions — `GET {subscriptions_url}`
 
 **Response:**

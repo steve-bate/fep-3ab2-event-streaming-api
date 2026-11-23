@@ -155,10 +155,13 @@ Requires: authenticated Principal. The ticket cookie is read if present.
 
 The server:
 1. Invalidates the ticket.
-2. Sends a `Set-Cookie` header that clears the cookie (`Max-Age=0`).
-3. Returns `204 No Content` if successful.
+2. Terminates any stream opened with that ticket, delivering no further events on it.
+3. Sends a `Set-Cookie` header that clears the cookie (`Max-Age=0`).
+4. Returns `204 No Content` if successful.
 
-Client implementations SHOULD close any active SSE connections associated with the revoked ticket.
+Revoking a ticket MUST terminate any stream it authorized, whether the revocation comes from this endpoint, from the ticket limit in the Ticket Security section, or from the concurrency limit on streams.
+
+Client implementations SHOULD close any active SSE connections associated with a revoked ticket.
 
 ## Subscription Management
 
@@ -169,6 +172,8 @@ All subscription endpoints require both:
 Missing either condition MUST result in `401 Unauthorized`, with the problem type given in the Errors section.
 
 A subscription selects which topics a Principal receives events for. It does not affect whether the Principal may see them. A server MUST reject a `POST {subscriptions_url}` that names a topic the Principal is not entitled to observe with `403 Forbidden`, or accept the subscription and withhold delivery for that topic.
+
+A ticket that has been used to open a stream remains valid for subscription management until it expires or is revoked.
 
 ### List Subscriptions — `GET {subscriptions_url}`
 
@@ -234,7 +239,7 @@ Error responses MUST use `application/problem+json` as defined in [RFC-9457]. Th
 |--------|--------|------|
 | `400 Bad Request` | `https://w3id.org/fep/3ab2#invalid-topic` | A topic does not conform to the structure defined in the Topics section, including a wildcard character the endpoint does not accept. |
 | `400 Bad Request` | `about:blank` | The request body is malformed. |
-| `401 Unauthorized` | `https://w3id.org/fep/3ab2#invalid-ticket` | The ticket is missing, expired, already consumed, or was issued to a different Principal. |
+| `401 Unauthorized` | `https://w3id.org/fep/3ab2#invalid-ticket` | The ticket is missing, expired, already used to open a stream, or was issued to a different Principal. |
 | `403 Forbidden` | `https://w3id.org/fep/3ab2#origin-not-allowed` | The request `Origin` is not allowlisted. |
 | `403 Forbidden` | `https://w3id.org/fep/c180#principal-not-authorized` | The Principal may not observe the requested topic. |
 | `405 Method Not Allowed` | `about:blank` | The request method is not supported on the endpoint. |
@@ -273,9 +278,11 @@ On success the server:
 3. Begins delivering `ServerSentEvent` frames for all topics the Principal is currently subscribed to.
 4. Keeps the connection open until the client disconnects, the ticket expires, the SSE session is revoked, or the server restarts.
 
-Only one active stream per Principal SHOULD be supported; if a second stream is opened the server MAY close the first.
+Servers MAY support several concurrent streams for the same Principal, so that a Principal can follow events on more than one device. A server that limits the number of concurrent streams per Principal MUST close the stream that was opened first when that limit is exceeded and MUST revoke the ticket that authorized it.
 
-The ticket is single-use. The server MUST only create one stream per ticket.
+A ticket MUST authorize at most one stream.
+
+A client whose stream ends — whether the server closed it or the connection failed — MUST NOT open a new stream with the same ticket. It MUST create a new session with `POST {streamingControl}` and open a new stream with the URL from that response.
 
 ### ActivityPub SSE Event Format
 

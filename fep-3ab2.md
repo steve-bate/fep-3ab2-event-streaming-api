@@ -118,6 +118,7 @@ The server:
 | `subscriptions_url` | string | **Required.** Absolute URL of the subscriptions endpoint. Clients MUST use this value for all subscription management requests in this session. |
 | `stream_url` | string | **Required.** Absolute URL of the SSE stream endpoint. Clients MUST use this value to open the event stream. |
 | `expires_at` | string | ISO 8601 UTC timestamp of ticket expiry. |
+| `heartbeat_interval` | integer | **Optional.** The maximum number of seconds the server will go without sending any frame on the stream. If present, the server MUST send an event or heartbeat at least that often. |
 | `wildcard_support` | bool | Indicates whether the server supports topic wildcards. Defaults to `true` if not provided. |
 
 Servers MUST include `subscriptions_url` and `stream_url` in every `201 Created` response to this endpoint. Clients MUST treat these URLs as opaque and MUST NOT attempt to derive or construct them from the SSE prefix or any other path convention.
@@ -271,7 +272,7 @@ data: <JSON-object>\n
 
 ### Heartbeats
 
-Servers SHOULD send periodic SSE heartbeat events (`event: heartbeat`) at regular intervals (RECOMMENDED: every 15 to 30 seconds) to prevent proxy timeouts and help clients detect dead connections. The `id` and `data` fields are optional in these events.
+Servers SHOULD send periodic SSE heartbeat events (`event: heartbeat`) to prevent proxy timeouts and to let a client detect a connection that has failed silently — a half-open TCP connection, or an intermediary that dropped it; the `id` and `data` fields are optional in these events. A server that sends heartbeats MUST include `heartbeat_interval` in every `201 Created` response and MUST NOT leave the stream silent longer than that interval. A client MAY use the advertised interval as a failure detector: when nothing arrives within twice the interval, the connection has failed and the client MAY open a new stream with a new ticket. When `heartbeat_interval` is absent, a client has no way to detect a silently failed connection and observes failure only through transport errors — the `EventSource` error event, connection close, or a proxy timeout.
 
 ## Security Considerations
 

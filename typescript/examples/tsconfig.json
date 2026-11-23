@@ -1,0 +1,16 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "..",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "paths": {
+      "@fep-3ab2/streaming": ["../src/topics/index.ts"],
+      "@fep-3ab2/streaming/topics": ["../src/topics/index.ts"],
+      "@fep-3ab2/streaming/client": ["../src/client/index.ts"],
+      "@fep-3ab2/streaming/server": ["../src/server/index.ts"],
+      "@fep-3ab2/streaming/testing": ["../src/testing/index.ts"]
+    }
+  },
+  "include": ["**/*.ts"]
+}

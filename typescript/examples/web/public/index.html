@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FEP-3ab2 streaming demo</title>
+    <meta name="api-origin" content="__API_ORIGIN__" />
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #14161a;
+        --panel: #1b1e24;
+        --border: #2c313a;
+        --text: #e7e9ee;
+        --muted: #98a0ae;
+        --accent: #7cc4ff;
+        --ok: #6fdc8c;
+        --warn: #ffcc66;
+        --bad: #ff7b72;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 2rem 1.25rem 4rem;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          15px/1.55 system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          sans-serif;
+      }
+      main {
+        max-width: 900px;
+        margin: 0 auto;
+        display: grid;
+        gap: 1rem;
+      }
+      h1 {
+        font-size: 1.35rem;
+        margin: 0 0 0.25rem;
+        letter-spacing: -0.01em;
+      }
+      p.lede {
+        margin: 0;
+        color: var(--muted);
+      }
+      section {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 1rem 1.1rem;
+      }
+      h2 {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+        margin: 0 0 0.75rem;
+      }
+      .row {
+        display: flex;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      input,
+      button {
+        font: inherit;
+        color: inherit;
+        background: #101216;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 0.45rem 0.6rem;
+      }
+      input::placeholder {
+        color: #66707f;
+      }
+      input:focus,
+      button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      button {
+        cursor: pointer;
+        background: #232833;
+      }
+      button:hover:not(:disabled) {
+        background: #2b3140;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      label.check {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.82rem;
+        color: var(--muted);
+      }
+      label.check input {
+        width: auto;
+        padding: 0;
+        accent-color: var(--accent);
+      }
+      button.small {
+        padding: 0.1rem 0.45rem;
+        font-size: 0.76rem;
+        color: var(--muted);
+      }
+      .row.examples {
+        gap: 0.35rem;
+        margin-top: 0.4rem;
+      }
+      button.primary {
+        background: #17364c;
+        border-color: #26587a;
+      }
+      button.danger {
+        background: #3a1f1f;
+        border-color: #6b2f2f;
+      }
+      code,
+      .mono {
+        font-family: var(--mono);
+        font-size: 0.86em;
+      }
+      .badge {
+        font-family: var(--mono);
+        font-size: 0.8rem;
+        padding: 0.1rem 0.45rem;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+      }
+      .badge.idle,
+      .badge.closed {
+        color: var(--muted);
+      }
+      .badge.connecting,
+      .badge.reconnecting {
+        color: var(--warn);
+        border-color: #5a4a1f;
+      }
+      .badge.open {
+        color: var(--ok);
+        border-color: #265c34;
+      }
+      ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.35rem;
+      }
+      li.topic {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 0.5rem;
+        font-family: var(--mono);
+        font-size: 0.86rem;
+        background: #101216;
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 0.3rem 0.55rem;
+      }
+      li.topic button {
+        padding: 0.1rem 0.4rem;
+        font-size: 0.8rem;
+      }
+      #events {
+        max-height: 340px;
+        overflow-y: auto;
+        display: grid;
+        gap: 0.4rem;
+        font-family: var(--mono);
+        font-size: 0.8rem;
+      }
+      .event {
+        border-left: 2px solid var(--accent);
+        padding: 0.25rem 0.6rem;
+        background: #101216;
+        border-radius: 0 6px 6px 0;
+      }
+      .event .meta {
+        color: var(--muted);
+        font-size: 0.75rem;
+      }
+      .event .body {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .section-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+      }
+      .section-head h2 {
+        margin: 0;
+      }
+      #timeline {
+        display: grid;
+        gap: 0.5rem;
+      }
+      .note {
+        display: grid;
+        gap: 0.4rem;
+        padding: 0.5rem 0.6rem;
+        background: #101216;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+      }
+      .note .note-meta {
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 0.72rem;
+        word-break: break-all;
+      }
+      .note .row input {
+        flex: 1 1 16rem;
+      }
+      #log {
+        font-family: var(--mono);
+        font-size: 0.78rem;
+        color: var(--muted);
+        max-height: 120px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+      }
+      .hint {
+        color: var(--muted);
+        font-size: 0.82rem;
+        margin: 0.5rem 0 0;
+      }
+      .stats {
+        display: flex;
+        gap: 1.25rem;
+        flex-wrap: wrap;
+        font-size: 0.82rem;
+        color: var(--muted);
+      }
+      .stats b {
+        color: var(--text);
+        font-weight: 600;
+      }
+    </style>
+
+    <!--
+      The page imports the library by package name; the import map resolves those
+      specifiers to the built ESM in the package's dist/ directory, which the demo
+      web server exposes under /lib.
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@fep-3ab2/streaming/client": "/lib/client/index.js",
+          "@fep-3ab2/streaming/topics": "/lib/topics/index.js",
+          "@fep-3ab2/streaming": "/lib/topics/index.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>FEP-3ab2 event streaming</h1>
+        <p class="lede">
+          This page is served from <code id="page-origin">:5180</code>; the ActivityPub API runs on
+          <code id="api-origin">:5181</code>. Every call is cross-origin, credentialed, and allowed
+          by an exact-origin CORS policy.
+        </p>
+      </header>
+
+      <section>
+        <h2>1. Sign in</h2>
+        <div class="row">
+          <input id="username" value="alice" aria-label="Username" size="12" />
+          <input id="password" type="password" value="demo" aria-label="Password" size="12" />
+          <button id="login" class="primary">Sign in</button>
+          <span class="badge idle" id="auth-badge">signed out</span>
+        </div>
+        <p class="hint">
+          Demo credentials: <code>alice</code> / <code>demo</code>. Basic auth once, then a session
+          cookie.
+        </p>
+      </section>
+
+      <section>
+        <h2>2. Stream</h2>
+        <div class="row">
+          <button id="connect" class="primary" disabled>Connect</button>
+          <button id="disconnect" disabled>Disconnect</button>
+          <span class="badge idle" id="state-badge">idle</span>
+        </div>
+        <div class="stats" style="margin-top: 0.75rem">
+          <span>events <b id="stat-events">0</b></span>
+          <span>reconnects <b id="stat-reconnects">0</b></span>
+          <span>expires <b id="stat-expiry">—</b></span>
+        </div>
+        <p class="hint" id="session-urls">No session yet.</p>
+      </section>
+
+      <section>
+        <h2>3. Subscriptions</h2>
+        <div class="row">
+          <input
+            id="topic"
+            placeholder="host/users/alice/inbox"
+            aria-label="Topic"
+            size="28"
+            disabled
+          />
+          <button id="add-topic" disabled>Add</button>
+        </div>
+        <div class="row examples">
+          <button id="suggest-1" class="small" disabled title="Example: the actor's inbox topic">
+            inbox
+          </button>
+          <button
+            id="suggest-2"
+            class="small"
+            disabled
+            title="Example: every topic under the actor"
+          >
+            actor/#
+          </button>
+        </div>
+        <ul id="topics" style="margin-top: 0.75rem"></ul>
+      </section>
+
+      <section>
+        <h2>4. Create a note (inbox)</h2>
+        <div class="row">
+          <input
+            id="note-content"
+            placeholder="Write a note…"
+            aria-label="Note content"
+            size="42"
+            disabled
+          />
+          <button id="create-note" class="primary" disabled>Create Note</button>
+          <label class="check">
+            <input type="checkbox" id="use-add" disabled />
+            Use Add
+          </label>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Stream</h2>
+          <button id="clear-events" class="small" disabled>Clear</button>
+        </div>
+        <div id="events"></div>
+      </section>
+
+      <section>
+        <h2>Timeline</h2>
+        <div id="timeline"></div>
+        <p class="hint">
+          Rebuilt from stream events: <code>Create</code> adds, <code>Update</code> replaces,
+          <code>Delete</code> removes.
+        </p>
+      </section>
+
+      <section>
+        <h2>Client log</h2>
+        <div id="log"></div>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

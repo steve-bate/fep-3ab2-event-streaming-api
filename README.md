@@ -27,6 +27,7 @@ topics by dropping the scheme and splitting the authority and path into segments
 
 - [`fep-3ab2.md`](fep-3ab2.md) — the proposal
 - [`fep-3ab2.jsonld`](fep-3ab2.jsonld) — JSON-LD context
+- [`typescript/`](typescript/README.md) — reference implementation in TypeScript
 
 ## The FEP
 

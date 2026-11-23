@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-examples/
+coverage/
+*.log
+
+# Local demo configuration (origins, ports, credentials). Commit `.env.example`.
+.env
+.env.*
+!.env.example

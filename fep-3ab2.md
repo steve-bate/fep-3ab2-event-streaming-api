@@ -90,6 +90,8 @@ For ActivityPub entities, topics correspond to ActivityPub HTTP/HTTPS URIs. To c
 
 Topic wildcard characters in topic segments MUST be URL-escaped.
 
+Topic segments are percent-encoded in the usual way, and only the wildcard characters and the escape character itself are encoded: a literal `%2B` in a URI path appears as `%252B`, so it is not confused with an escaped `+`.
+
 **Examples**
 
 | URL | Topic |
@@ -97,6 +99,7 @@ Topic wildcard characters in topic segments MUST be URL-escaped.
 | `https://server.example/note/1` | `server.example/note/1` |
 | `https://server.example:1000/actor#xyz` | `server.example:1000/actor/xyz` |
 | `https://server.example:1000/actor+123#xyz` | `server.example:1000/actor%2B123/xyz` |
+| `https://server.example/note/a%2Bb` | `server.example/note/a%252Bb` |
 
 ## Session Management
 

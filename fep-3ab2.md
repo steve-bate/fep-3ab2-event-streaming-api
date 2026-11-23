@@ -166,7 +166,7 @@ All subscription endpoints require both:
 - A valid authentication credential.
 - A valid, non-expired ticket cookie associated with the authenticated Principal.
 
-Missing either condition MUST result in `401 Unauthorized`.
+Missing either condition MUST result in `401 Unauthorized`, with the problem type given in the Errors section.
 
 ### List Subscriptions — `GET {subscriptions_url}`
 
@@ -223,6 +223,37 @@ The `topic` query parameter is required. Removing a non-existent topic MUST be i
 **Response:**
 
 - If successful, the server MUST respond with `204 No Content`.
+
+## Errors
+
+Error responses MUST use `application/problem+json` as defined in [RFC-9457]. The `type` member identifies the problem, `title` and `detail` carry human-readable text, and `status` repeats the HTTP status code. Problem types defined in [FEP-c180] are reused where they fit; the rest use the `https://w3id.org/fep/3ab2#` prefix. Where none of the types below applies, the server MAY use `about:blank` as defined in [RFC-9457].
+
+| HTTP status | `type` | When |
+|--------|--------|------|
+| `400 Bad Request` | `https://w3id.org/fep/3ab2#invalid-topic` | A topic does not conform to the structure defined in the Topics section, including a wildcard character the endpoint does not accept. |
+| `400 Bad Request` | `about:blank` | The request body is malformed. |
+| `401 Unauthorized` | `https://w3id.org/fep/3ab2#invalid-ticket` | The ticket is missing, expired, already consumed, or was issued to a different Principal. |
+| `403 Forbidden` | `https://w3id.org/fep/3ab2#origin-not-allowed` | The request `Origin` is not allowlisted. |
+| `403 Forbidden` | `https://w3id.org/fep/c180#principal-not-authorized` | The Principal may not observe the requested topic. |
+| `405 Method Not Allowed` | `about:blank` | The request method is not supported on the endpoint. |
+| `406 Not Acceptable` | `about:blank` | `Accept: text/event-stream` is absent from a request to `GET {stream_url}`. |
+| `429 Too Many Requests` | `https://w3id.org/fep/c180#rate-limit-exceeded` | Ticket issuance or stream connections exceed the server's limit. |
+
+**Example (non-normative)** — a request to `GET {stream_url}` with an expired ticket returns `401 Unauthorized` with these headers and body:
+
+```http
+HTTP/1.1 401 Unauthorized
+Content-Type: application/problem+json
+```
+
+```json
+{
+  "type": "https://w3id.org/fep/3ab2#invalid-ticket",
+  "title": "Invalid ticket",
+  "status": 401,
+  "detail": "The ticket expired at 2026-03-10T12:05:00Z."
+}
+```
 
 ## SSE Stream Endpoint
 
@@ -282,7 +313,7 @@ Servers SHOULD send periodic SSE heartbeat events (`event: heartbeat`) to preven
 ### Ticket Security
 
 - Tickets MUST be generated using a cryptographically secure random source with sufficient entropy to resist guessing attacks.
-- Servers SHOULD limit the number of live tickets per Principal (for example, the most recent few) and SHOULD rate-limit `POST {streamingControl}` per Principal, answering `429 Too Many Requests` when the limit is exceeded. Issuing a new ticket beyond the limit SHOULD revoke the oldest.
+- Servers SHOULD limit the number of live tickets per Principal (for example, the most recent few) and SHOULD rate-limit `POST {streamingControl}` per Principal, answering `429 Too Many Requests` when the limit is exceeded, with the problem type given in the Errors section. Issuing a new ticket beyond the limit SHOULD revoke the oldest.
 - Tickets MUST be invalidated on SSE session revocation (`DELETE {streamingControl}`).
 - Servers MUST enforce ticket TTL; expired tickets MUST be rejected.
 - Ticket values MUST NOT appear in server access logs in plain form.
@@ -295,7 +326,7 @@ Servers SHOULD send periodic SSE heartbeat events (`event: heartbeat`) to preven
 
 ### Authorization
 
-- The server MUST verify that the ticket's associated Principal matches the currently authenticated Principal on every request that requires a ticket. Mismatches MUST result in `401 Unauthorized`.
+- The server MUST verify that the ticket's associated Principal matches the currently authenticated Principal on every request that requires a ticket. Mismatches MUST result in `401 Unauthorized`, with the problem type given in the Errors section.
 - Subscriptions are scoped to the authenticated Principal; one Principal MUST NOT be able to read or modify another Principal's subscriptions.
 
 ### Topic Namespace
@@ -346,6 +377,8 @@ Another common technique for implementing event streams is to use [WebSockets](h
 [OAUTH2]: https://oauth.net/2/ "OAuth 2.0 is the industry-standard protocol for authorization. OAuth 2.0 focuses on client developer simplicity while providing specific authorization flows for web applications, desktop applications, mobile phones, and living room devices."
 [RFC-2119]: https://tools.ietf.org/html/RFC-2119.html "Key words for use in RFCs to Indicate Requirement Levels"
 [RFC-3339]: https://tools.ietf.org/html/rfc3339.html "Date and Time on the Internet: Timestamps"
+[RFC-9457]: https://www.rfc-editor.org/rfc/rfc9457.html "Problem Details for HTTP APIs"
+[FEP-c180]: https://codeberg.org/fediverse/fep/src/branch/main/fep/c180/fep-c180.md "Problem Details for ActivityPub"
 [W3C EventSource]: https://html.spec.whatwg.org/multipage/server-sent-events.html
 [MQTT Wildcards]: https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901241
 [CORS]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS

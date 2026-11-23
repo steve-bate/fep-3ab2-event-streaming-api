@@ -278,6 +278,7 @@ Servers SHOULD send periodic SSE heartbeat events (`event: heartbeat`) at regula
 ### Ticket Security
 
 - Tickets MUST be generated using a cryptographically secure random source with sufficient entropy to resist guessing attacks.
+- Servers SHOULD limit the number of live tickets per Principal (for example, the most recent few) and SHOULD rate-limit `POST {streamingControl}` per Principal, answering `429 Too Many Requests` when the limit is exceeded. Issuing a new ticket beyond the limit SHOULD revoke the oldest.
 - Tickets MUST be invalidated on SSE session revocation (`DELETE {streamingControl}`).
 - Servers MUST enforce ticket TTL; expired tickets MUST be rejected.
 - Ticket values MUST NOT appear in server access logs in plain form.

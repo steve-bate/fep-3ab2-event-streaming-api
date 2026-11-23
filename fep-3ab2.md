@@ -120,11 +120,11 @@ The server:
 |-------|------|-------------|
 | `subscriptions_url` | string | **Required.** Absolute URL of the subscriptions endpoint. Clients MUST use this value for all subscription management requests in this session. |
 | `stream_url` | string | **Required.** Absolute URL of the SSE stream endpoint. Clients MUST use this value to open the event stream. |
-| `expires_at` | string | ISO 8601 UTC timestamp of ticket expiry. |
+| `expires_at` | string | **Required.** Timestamp as defined in [RFC-3339], in UTC, with second precision and no fractional seconds (for example `2026-03-10T12:05:00Z`). The ticket expires at this instant, and the server terminates any stream the ticket opened. |
 | `heartbeat_interval` | integer | **Optional.** The maximum number of seconds the server will go without sending any frame on the stream. If present, the server MUST send an event or heartbeat at least that often. |
 | `wildcard_support` | bool | Indicates whether the server supports topic wildcards. Defaults to `true` if not provided. |
 
-Servers MUST include `subscriptions_url` and `stream_url` in every `201 Created` response to this endpoint. Clients MUST treat these URLs as opaque and MUST NOT attempt to derive or construct them from the SSE prefix or any other path convention.
+Servers MUST include `subscriptions_url`, `stream_url` and `expires_at` in every `201 Created` response to this endpoint. Clients MUST treat these URLs as opaque and MUST NOT attempt to derive or construct them from the SSE prefix or any other path convention.
 
 **Example**
 
@@ -345,6 +345,7 @@ Another common technique for implementing event streams is to use [WebSockets](h
 [ActivityVocabulary]: https://www.w3.org/TR/activitystreams-core/ "This specification describes the Activity vocabulary. It is intended to be used in the context of the ActivityStreams 2.0 format and provides a foundational vocabulary for activity structures, and specific activity types."
 [OAUTH2]: https://oauth.net/2/ "OAuth 2.0 is the industry-standard protocol for authorization. OAuth 2.0 focuses on client developer simplicity while providing specific authorization flows for web applications, desktop applications, mobile phones, and living room devices."
 [RFC-2119]: https://tools.ietf.org/html/RFC-2119.html "Key words for use in RFCs to Indicate Requirement Levels"
+[RFC-3339]: https://tools.ietf.org/html/rfc3339.html "Date and Time on the Internet: Timestamps"
 [W3C EventSource]: https://html.spec.whatwg.org/multipage/server-sent-events.html
 [MQTT Wildcards]: https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901241
 [CORS]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS

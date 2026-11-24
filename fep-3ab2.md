@@ -110,7 +110,7 @@ Requires: authenticated Principal.
 The server:
 
 1. Generates a cryptographically random ticket.
-2. Records SSE session state (ticket, Principal, origin, etc.).
+2. Records SSE session state (ticket, Principal, the client origin verified under Transport Security, etc.) and binds the ticket to that origin.
 3. Sets a `Set-Cookie` response header carrying the ticket value with the implementation's configured `Path`, `SameSite`, `Secure` and `HttpOnly` attributes.
 4. Returns `201 Created` with a JSON body.
 
@@ -142,9 +142,9 @@ Servers MUST include `subscriptions_url`, `stream_url` and `expires_at` in every
 | Attribute | Recommended value |
 |-----------|------------------|
 | `Path` | Scoped to the implementation's streaming API path |
-| `SameSite` | `Lax` |
+| `SameSite` | `Lax` for a same-site client, `None` for a cross-site client (see the Deployment Origins section) |
 | `Secure` | `true` in production |
-| `HttpOnly` | The server MAY set this to `false` to allow JavaScript access |
+| `HttpOnly` | `true` |
 | `Max-Age` | Cookie expiry age |
 
 The ticket MUST expire after a server-configured TTL. Clients MUST call `POST {streamingControl}` again to renew before opening a new stream.
@@ -209,6 +209,8 @@ Subscriptions belong to the Principal. They apply to every subsequent ticket and
 |-------|------|----------|-------------|
 | `topics` | string&nbsp;array | **Required.** | The topic identifiers or patterns |
 
+The request MUST carry `Content-Type: application/json`; a request with any other media type MUST be rejected with `415 Unsupported Media Type`, with the problem type given in the Errors section. This media type blocks a cross-site request forgery: a form cannot send it, so the browser must preflight the request first.
+
 **Response:**
 
 ```json
@@ -246,6 +248,7 @@ Error responses MUST use `application/problem+json` as defined in [RFC-9457]. Th
 | `403 Forbidden` | `https://w3id.org/fep/c180#principal-not-authorized` | The Principal may not observe the requested topic. |
 | `405 Method Not Allowed` | `about:blank` | The request method is not supported on the endpoint. |
 | `406 Not Acceptable` | `about:blank` | `Accept: text/event-stream` is absent from a request to `GET {stream_url}`. |
+| `415 Unsupported Media Type` | `about:blank` | The request body is not of the required media type. |
 | `429 Too Many Requests` | `https://w3id.org/fep/c180#rate-limit-exceeded` | Ticket issuance or stream connections exceed the server's limit. |
 
 **Example (non-normative)** — a request to `GET {stream_url}` with an expired ticket returns `401 Unauthorized` with these headers and body:
@@ -271,6 +274,7 @@ Content-Type: application/problem+json
 Requires:
 - A valid authentication credential.
 - A valid, non-expired ticket cookie whose associated identity matches the Principal.
+- The `Origin` of the request, when present, MUST match the origin recorded with the ticket.
 
 The client MUST send `Accept: text/event-stream`.
 
@@ -328,12 +332,25 @@ Servers SHOULD send periodic SSE heartbeat events (`event: heartbeat`) to preven
 - Tickets MUST be invalidated on SSE session revocation (`DELETE {streamingControl}`).
 - Servers MUST enforce ticket TTL; expired tickets MUST be rejected.
 - Ticket values MUST NOT appear in server access logs in plain form.
+- A ticket is bound to the client origin recorded when it was issued and is usable only from that origin; a request to the stream endpoint whose `Origin` header is present and differs from the ticket's origin MUST be rejected with `403 Forbidden`, with the problem type given in the Errors section.
 
 ### Cookie Security
 
 - The ticket cookie SHOULD be `Secure` (HTTPS only) in production.
-- `SameSite=Lax` or `SameSite=Strict` MUST be set to mitigate CSRF.
-- `HttpOnly` SHOULD be set unless the client is a first-party JavaScript application that must read the cookie.
+- The `SameSite` attribute MUST match the deployment: `Lax` or `Strict` for a client served from the same site as the API, `None` together with `Secure` for a client served from a different site, since a user agent rejects a `SameSite=None` cookie without the `Secure` attribute ([MDN-COOKIE]). The Deployment Origins section states both arrangements.
+- The ticket cookie MUST be `HttpOnly`: the requests this FEP defines let the browser attach the cookie, and no client defined here reads its value.
+
+### Deployment Origins
+
+A client and its streaming API sit on one site or on two. A site is a registrable domain: `client.fep.example` and `fep.example` are one site, while `client.example` and `server.example` are two. Every request this FEP defines is a subresource request (`fetch`, XMLHttpRequest or `EventSource`), and the `SameSite` attribute in [COOKIE-SPEC] withholds a `Lax` or `Strict` cookie from a cross-site subresource request, so the client's site decides the `SameSite` value the server sets.
+
+**Same-site deployment.** The client and the API share a registrable domain. The server sets the ticket cookie with `SameSite=Lax` or `SameSite=Strict`, and applies the CORS requirements of the Transport Security section to requests whose origin differs from the API's origin.
+
+**Cross-site deployment.** The client and the API are on different registrable domains. The server sets the ticket cookie with `SameSite=None` and `Secure`, and applies the strict CORS configuration of the Transport Security section. `SameSite=None` lets the cookie travel on requests from any site, so the server MUST validate `Origin` whenever the header is present and reject every origin it does not trust with `403 Forbidden`, with the problem type given in the Errors section; a request sent from a page on another site carries an `Origin` header ([FETCH]), and a request with no `Origin` cannot be forged from another site, so the check covers every request a third-party page can cause. The ticket cookie is then a third-party cookie, and browsers apply third-party cookie policies that differ and change over time (Safari blocks third-party cookies by default), so a deployment should be verified against the browsers it must support. When the browser withholds the cookie, the client holds no ticket, and its request to open the stream is answered `401 Unauthorized` with the problem type given in the Errors section.
+
+**A trusted origin** is an origin on the server's allowlist, or the origin recorded for a client the Principal approves. A client registers its origin with the server, the Principal approves the client, and the server then accepts requests whose `Origin` matches that recorded origin. This serves a client on a domain the server cannot know in advance, provided its requests carry a credential that identifies the client, such as an OAuth 2.0 access token. A server that relies on a credential the browser attaches on its own, such as a session cookie, uses a server-side allowlist instead, since the credential identifies no client.
+
+A client whose origin differs from the API's origin MUST send its credentials with every request to the control, subscriptions and stream endpoints (`credentials: 'include'` on `fetch`, `withCredentials: true` on `EventSource`).
 
 ### Authorization
 
@@ -349,11 +366,11 @@ Servers SHOULD send periodic SSE heartbeat events (`event: heartbeat`) to preven
 - All endpoints MUST be served over HTTPS in production.
 - SSE connections SHOULD be protected against cross-origin misuse via [`CORS`][CORS] headers restricting `Origin` to trusted first-party origins.
 
-- If the client application is served from a different first-party origin (for example `app.example` for the client and `api.example` for the API), CORS is required and MUST be strict:
+- If the client application is served from an origin other than the API's own (for example `client.example` for the client and `server.example` for the API), CORS is required and MUST be strict:
   1. The server MUST send the exact client origin in `Access-Control-Allow-Origin`, never `*`.
   2. The server MUST include `Access-Control-Allow-Credentials: true` if cookies are used.
   3. The server SHOULD send `Vary: Origin`.
-  4. The server SHOULD validate `Origin` against an allowlist and reject all others.
+  4. The server MUST validate `Origin` whenever the header is present and reject every origin it does not trust, as the Deployment Origins section defines trust. CORS blocks a page from reading the response, not from sending the request; only rejecting an untrusted `Origin` stops a third-party page from acting on the API.
 
 
 ## Privacy Considerations
@@ -366,7 +383,8 @@ The SSE stream may carry sensitive information (notifications, timeline events).
 
 ## Implementations
 
-- [FIRM](https://github.com/steve-bate/firm)
+- [FIRM](https://github.com/steve-bate/firm): Python server.
+- [@fep-3ab2/streaming](https://github.com/steve-bate/fep-3ab2-event-streaming-api/tree/main/typescript): TypeScript client and server toolkit, with an example Express server and a browser demo. Not yet published to npm; see the source tree.
 
 ## Alternative Approaches
 
@@ -393,6 +411,9 @@ Another common technique for implementing event streams is to use [WebSockets](h
 [W3C EventSource]: https://html.spec.whatwg.org/multipage/server-sent-events.html
 [MQTT Wildcards]: https://docs.oasis-open.org/mqtt/mqtt/v5.0/os/mqtt-v5.0-os.html#_Toc3901241
 [CORS]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CORS
+[COOKIE-SPEC]: https://datatracker.ietf.org/doc/draft-ietf-httpbis-rfc6265bis/ "Cookies: HTTP State Management Mechanism; defines the SameSite attribute"
+[FETCH]: https://fetch.spec.whatwg.org/ "Fetch Standard; defines when the Origin header is sent"
+[MDN-COOKIE]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Cookies "Using HTTP cookies; states that SameSite=None requires Secure"
 
 ## Copyright
 

@@ -30,6 +30,8 @@ const api = createApiServer({
   cookieSecure: config.cookieSecure,
   cookieSameSite: config.cookieSameSite,
   users: config.users,
+  ...(config.clients.length === 0 ? {} : { clients: config.clients }),
+  ...(config.clientOnly ? { clientOnly: true } : {}),
   log: config.log,
 });
 
@@ -50,7 +52,11 @@ const apiListener = singleOrigin
 
 const webListener = web.app.listen(webPort, () => {
   console.log(`demo page           ${pageUrl}`);
-  console.log(`  allowed origins  ${config.webOrigins.join(', ')}`);
+  console.log(
+    config.clientOnly
+      ? '  allowlist        none (client-bound origins only)'
+      : `  allowed origins  ${config.webOrigins.join(', ')}`,
+  );
   console.log(
     singleOrigin
       ? '  mode             single origin (the API is mounted on this port)'

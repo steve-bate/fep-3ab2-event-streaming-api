@@ -151,39 +151,43 @@ and interfaces a database backend can satisfy), `logger`, `urls`,
 Every failure is an RFC 9457 problem detail served as `application/problem+json`.
 `problem(type, status, detail)` builds one, `PROBLEM_TYPES` carries the type URIs:
 
-| Status | `type`                                               | When                                     |
-| ------ | ---------------------------------------------------- | ---------------------------------------- |
-| 400    | `https://w3id.org/fep/3ab2#invalid-topic`            | topic structure, or unsupported wildcard |
-| 400    | `about:blank`                                        | malformed body, missing `topic` query    |
-| 401    | `https://w3id.org/fep/3ab2#invalid-ticket`           | missing, expired, used, other principal  |
-| 403    | `https://w3id.org/fep/3ab2#origin-not-allowed`       | `Origin` not on the allowlist            |
-| 403    | `https://w3id.org/fep/c180#principal-not-authorized` | topic the principal may not observe      |
-| 405    | `about:blank`                                        | method the endpoint does not define      |
-| 406    | `about:blank`                                        | `Accept` does not name the stream type   |
-| 429    | `https://w3id.org/fep/c180#rate-limit-exceeded`      | session issuance over the limit          |
+| Status | `type`                                               | When                                                    |
+| ------ | ---------------------------------------------------- | ------------------------------------------------------- |
+| 400    | `https://w3id.org/fep/3ab2#invalid-topic`            | topic structure, or unsupported wildcard                |
+| 400    | `about:blank`                                        | malformed body, missing `topic` query                   |
+| 401    | `https://w3id.org/fep/3ab2#invalid-ticket`           | missing, expired, used, other principal                 |
+| 403    | `https://w3id.org/fep/3ab2#origin-not-allowed`       | untrusted `Origin`, or one the ticket was not issued to |
+| 403    | `https://w3id.org/fep/c180#principal-not-authorized` | topic the principal may not observe                     |
+| 405    | `about:blank`                                        | method the endpoint does not define                     |
+| 406    | `about:blank`                                        | `Accept` does not name the stream type                  |
+| 415    | `about:blank`                                        | subscription body is not `application/json`             |
+| 429    | `https://w3id.org/fep/c180#rate-limit-exceeded`      | session issuance over the limit                         |
 
 ### What it enforces
 
-| Requirement (FEP-3ab2)                                     | Where                                  |
-| ---------------------------------------------------------- | -------------------------------------- |
-| 256-bit random ticket, unguessable                         | `generateTicket()`, `crypto.ts`        |
-| Ticket values never stored or logged in clear text         | `InMemoryTicketStore` keys on SHA-256  |
-| Ticket is single-use; one stream per ticket                | `TicketStore.consume()` (race-guarded) |
-| Ticket must match the authenticated principal              | every ticket-guarded call              |
-| One stream per principal (a second supersedes the first)   | `openStream`                           |
-| Stream ends on ticket expiry, revocation, disconnect       | `openStream` + `revokeSession`         |
-| `#` matches zero or more segments, `+` exactly one         | `compileTopicPattern`                  |
-| Wildcards must fill a segment; literal `+`/`#` escaped     | `validateTopic`                        |
-| Adding/removing subscriptions is idempotent                | `SubscriptionStore`                    |
-| Absolute `subscriptions_url` / `stream_url` in the session | `createSession`                        |
-| `heartbeat_interval` in the 201 whenever heartbeats are on | `createSession`                        |
-| Strict CORS: exact origin, credentials, `Vary: Origin`     | `evaluateCors`, `preflightHeaders`     |
-| Heartbeats every 15–30 s (default 20 s)                    | `openStream` frame loop                |
-| `406` unless `Accept` names `text/event-stream`            | `openStream`                           |
-| Superseded stream's ticket is revoked with the stream      | `openStream`                           |
-| Live tickets capped per principal, oldest revoked          | `createSession`                        |
-| `429` with the c180 type over the session rate limit       | `createSession`                        |
-| Errors as RFC 9457 problem details                         | `problem()`, every failure path        |
+| Requirement (FEP-3ab2)                                                     | Where                                  |
+| -------------------------------------------------------------------------- | -------------------------------------- |
+| 256-bit random ticket, unguessable                                         | `generateTicket()`, `crypto.ts`        |
+| Ticket values never stored or logged in clear text                         | `InMemoryTicketStore` keys on SHA-256  |
+| Ticket is single-use; one stream per ticket                                | `TicketStore.consume()` (race-guarded) |
+| Ticket must match the authenticated principal                              | every ticket-guarded call              |
+| One stream per principal (a second supersedes the first)                   | `openStream`                           |
+| Stream ends on ticket expiry, revocation, disconnect                       | `openStream` + `revokeSession`         |
+| `#` matches zero or more segments, `+` exactly one                         | `compileTopicPattern`                  |
+| Wildcards must fill a segment; literal `+`/`#` escaped                     | `validateTopic`                        |
+| Adding/removing subscriptions is idempotent                                | `SubscriptionStore`                    |
+| Absolute `subscriptions_url` / `stream_url` in the session                 | `createSession`                        |
+| `heartbeat_interval` in the 201 whenever heartbeats are on                 | `createSession`                        |
+| Strict CORS: exact origin, credentials, `Vary: Origin`, `403` when refused | `evaluateCors`, `preflightHeaders`     |
+| Client-bound origin trusted through `originTrust`                          | `corsHeaders`, `preflight`             |
+| Stream `Origin` must match the ticket's recorded origin                    | `openStream`                           |
+| `415` unless the subscription body is `application/json`                   | `addSubscriptions`                     |
+| Heartbeats every 15–30 s (default 20 s)                                    | `openStream` frame loop                |
+| `406` unless `Accept` names `text/event-stream`                            | `openStream`                           |
+| Superseded stream's ticket is revoked with the stream                      | `openStream`                           |
+| Live tickets capped per principal, oldest revoked                          | `createSession`                        |
+| `429` with the c180 type over the session rate limit                       | `createSession`                        |
+| Errors as RFC 9457 problem details                                         | `problem()`, every failure path        |
 
 Subscriptions are kept per principal, so a consumed (already-used) ticket still authorises
 subscription management; only opening a second stream is refused, as the spec requires.
@@ -203,6 +207,14 @@ The page and the API are on **different origins**, so the demo only works becaus
 the FEP are implemented: exact `Access-Control-Allow-Origin`, credentialed requests, `Vary: Origin`,
 preflight for the `POST`s and the `DELETE …?topic=`, and an allowlist that answers `403` for
 anything else.
+
+**Client-bound origins.** `DEMO_WEB_ORIGIN` is the allowlist, and it is not the only way in. The
+demo's `/demo/token` stands in for an OAuth 2.0 token endpoint: the signed-in Principal gets a
+bearer token that names the client and the origin it registered (`DEMO_CLIENTS`). The service takes
+those two answers in turn — `cors.allowedOrigins` first, then the `originTrust` hook — so a client
+on a domain the server has never heard of gets served without a configuration change. The ticket
+records the origin it was issued to, and `openStream` refuses a stream whose `Origin` differs, which
+is what keeps the cookie-only stream request as narrow as an allowlist would.
 
 Sign in (Basic once, then a session cookie, because `EventSource` cannot send headers), connect,
 type something and press **Create Note**. The page POSTs a `Create{Note}` to `/users/alice/inbox`;
@@ -251,19 +263,20 @@ client that discovers the endpoint rather than hard-coding it.
 Copy `.env.example` to `.env` (it is gitignored; real environment variables win over it). Every key
 has a working default, so an empty file runs the loopback demo unchanged.
 
-| Key                               | Default           | Meaning                                                                                                         |
-| --------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------- |
-| `DEMO_API_ORIGIN`                 | unset             | absolute origin the API advertises, e.g. `https://api.example.com`; unset derives it from each request's `Host` |
-| `DEMO_WEB_ORIGIN`                 | unset             | absolute origin the page is served from; added to the CORS allowlist                                            |
-| `DEMO_WEB_ORIGINS`                | unset             | comma-separated allowlist, overriding `DEMO_WEB_ORIGIN`                                                         |
-| `DEMO_API_PORT` / `DEMO_WEB_PORT` | 5181 / 5180       | listen ports                                                                                                    |
-| `DEMO_SINGLE_ORIGIN`              | unset             | `1` mounts the API on the page's origin (one port)                                                              |
-| `DEMO_TICKET_TTL_SECONDS`         | 120               | ticket lifetime                                                                                                 |
-| `DEMO_HEARTBEAT_INTERVAL_MS`      | 10000             | heartbeat interval; advertised rounded up to whole seconds                                                      |
-| `DEMO_COOKIE_SAMESITE`            | `Lax`             | ticket cookie `SameSite`; `None` needs an https API origin                                                      |
-| `DEMO_USER` / `DEMO_PASSWORD`     | alice / demo      | demo credentials                                                                                                |
-| `DEMO_LOG`                        | 1                 | `0` silences the per-request streaming log                                                                      |
-| `DEMO_ENV_FILE`                   | `typescript/.env` | read a different env file                                                                                       |
+| Key                               | Default                        | Meaning                                                                                                         |
+| --------------------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| `DEMO_API_ORIGIN`                 | unset                          | absolute origin the API advertises, e.g. `https://api.example.com`; unset derives it from each request's `Host` |
+| `DEMO_WEB_ORIGIN`                 | unset                          | absolute origin the page is served from; added to the CORS allowlist                                            |
+| `DEMO_WEB_ORIGINS`                | unset                          | comma-separated allowlist, overriding `DEMO_WEB_ORIGIN`                                                         |
+| `DEMO_API_PORT` / `DEMO_WEB_PORT` | 5181 / 5180                    | listen ports                                                                                                    |
+| `DEMO_SINGLE_ORIGIN`              | unset                          | `1` mounts the API on the page's origin (one port)                                                              |
+| `DEMO_TICKET_TTL_SECONDS`         | 120                            | ticket lifetime                                                                                                 |
+| `DEMO_HEARTBEAT_INTERVAL_MS`      | 10000                          | heartbeat interval; advertised rounded up to whole seconds                                                      |
+| `DEMO_COOKIE_SAMESITE`            | `Lax`                          | ticket cookie `SameSite`; `None` needs an https API origin                                                      |
+| `DEMO_CLIENTS`                    | derived from `DEMO_WEB_ORIGIN` | `id@origin` pairs that may request a token, each with the origin it registered                                  |
+| `DEMO_USER` / `DEMO_PASSWORD`     | alice / demo                   | demo credentials                                                                                                |
+| `DEMO_LOG`                        | 1                              | `0` silences the per-request streaming log                                                                      |
+| `DEMO_ENV_FILE`                   | `typescript/.env`              | read a different env file                                                                                       |
 
 Setting `DEMO_API_ORIGIN` and `DEMO_WEB_ORIGIN` is what makes the demo usable behind a proxy or on a
 real host name: the session response advertises those URLs, the CORS allowlist names that page
@@ -271,17 +284,17 @@ origin, and the ticket cookie gets `Secure` because the API origin is `https`.
 
 ### Cross-site testing
 
-Two origins on the _same_ registrable domain (a page on `fep.stevebate.dev` calling an API on
-`fep-api.stevebate.dev`) are same-site, so the default `SameSite=Lax` cookie is sent and nothing
-else is needed.
+Two origins on the _same_ registrable domain (a page on `app.example.com` calling an API on
+`api.example.com`) are same-site, so the default `SameSite=Lax` cookie is sent and nothing else is
+needed.
 
 A page and an API on _different_ registrable domains are cross-site, and `Lax` is not sent on the
 `EventSource` request; the stream would answer `401 invalid-ticket` with a valid cookie in hand.
 That pair needs `SameSite=None; Secure`, so the API origin must be https:
 
 ```ini
-DEMO_API_ORIGIN=https://3ab2-server.stevebate.dev
-DEMO_WEB_ORIGIN=https://3ab2-client.technoetic.com
+DEMO_API_ORIGIN=https://api.example.com
+DEMO_WEB_ORIGIN=https://app.example.net
 DEMO_COOKIE_SAMESITE=None
 ```
 

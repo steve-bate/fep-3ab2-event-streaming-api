@@ -40,6 +40,10 @@ export interface DemoConfig {
   readonly cookieSameSite: SameSitePolicy;
   /** `username → password`. */
   readonly users: Readonly<Record<string, string>>;
+  /** No allowlist: trust comes only from the client behind the token. */
+  readonly clientOnly: boolean;
+  /** Clients that may ask for a token, each with the origin it registered. */
+  readonly clients: readonly { readonly clientId: string; readonly origin: string }[];
 }
 
 /**
@@ -81,6 +85,20 @@ export function parseConfig(env: NodeJS.ProcessEnv): DemoConfig {
     );
   }
 
+  // `id@origin` pairs, so a demo can try a client the allowlist never heard of.
+  const clients = (env['DEMO_CLIENTS'] ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => {
+      const at = entry.indexOf('@');
+      if (at <= 0) throw new Error(`DEMO_CLIENTS entries look like id@origin: ${entry}`);
+      return {
+        clientId: entry.slice(0, at),
+        origin: toOrigin(entry.slice(at + 1), 'DEMO_CLIENTS'),
+      };
+    });
+
   const user = env['DEMO_USER']?.trim() ?? '';
   const password = env['DEMO_PASSWORD'] ?? '';
 
@@ -97,6 +115,8 @@ export function parseConfig(env: NodeJS.ProcessEnv): DemoConfig {
     cookieSecure,
     cookieSameSite,
     users: { [user.length > 0 ? user : 'alice']: password.length > 0 ? password : 'demo' },
+    clients,
+    clientOnly: env['DEMO_CLIENT_ONLY'] === '1',
   };
 }
 

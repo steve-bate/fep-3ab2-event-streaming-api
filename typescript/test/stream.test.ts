@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PROBLEM_TYPES, type OpenStreamSuccess } from '@fep-3ab2/streaming/server';
 import {
   PRINCIPAL,
+  buildJsonRequest,
   buildRequest,
   jsonBody,
   nextFrame,
@@ -27,7 +28,7 @@ async function openStream(
 
   if (topics.length > 0) {
     const added = await service.addSubscriptions({
-      ...buildRequest(cookie, { principal }),
+      ...buildJsonRequest(cookie, { principal }),
       body: { topics },
     });
     expect(added.ok).toBe(true);
@@ -165,7 +166,7 @@ describe('GET {stream_url}', () => {
     const { cookie, stream } = await openStream(service, ['a/1']);
 
     const added = await service.addSubscriptions({
-      ...buildRequest(cookie),
+      ...buildJsonRequest(cookie),
       body: { topics: ['a/2'] },
     });
     expect(added.ok).toBe(true);

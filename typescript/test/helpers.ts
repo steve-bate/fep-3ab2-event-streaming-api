@@ -53,6 +53,15 @@ export function buildRequest(
   };
 }
 
+/** A request that carries a JSON body, as every client of the subscriptions endpoint does. */
+export function buildJsonRequest(
+  cookie?: string,
+  extra: Partial<AuthenticatedRequest> = {},
+): AuthenticatedRequest {
+  const request = buildRequest(cookie, extra);
+  return { ...request, headers: { ...request.headers, 'content-type': 'application/json' } };
+}
+
 export async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {

@@ -78,6 +78,15 @@ export function createLoopback(options: LoopbackOptions): Loopback {
     return new Response(JSON.stringify(result.body), { status: result.status, headers });
   }
 
+  function lowercaseHeaders(init: HeadersInit | undefined): Record<string, string> {
+    const out: Record<string, string> = {};
+    if (init === undefined) return out;
+    new Headers(init).forEach((value, name) => {
+      out[name.toLowerCase()] = value;
+    });
+    return out;
+  }
+
   /** A problem detail for a failure the adapter itself detects (404, 405). */
   function problemResponse(status: number, detail: string) {
     return new Response(JSON.stringify(problem(PROBLEM_TYPES.aboutBlank, status, detail)), {
@@ -93,6 +102,7 @@ export function createLoopback(options: LoopbackOptions): Loopback {
       principal: principal(),
       headers: {
         ...options.headers,
+        ...lowercaseHeaders(init.headers),
         cookie: cookieHeader(),
       },
       ...(options.origin === undefined ? {} : { origin: options.origin }),

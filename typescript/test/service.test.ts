@@ -12,6 +12,7 @@ import {
   API_ORIGIN,
   OTHER_PRINCIPAL,
   PRINCIPAL,
+  buildJsonRequest,
   buildRequest,
   setCookie,
   testService,
@@ -169,14 +170,14 @@ describe('subscriptions', () => {
     const { cookie } = await session(service);
 
     const first = await service.addSubscriptions({
-      ...buildRequest(cookie),
+      ...buildJsonRequest(cookie),
       body: { topics: ['server.example/note/2', 'server.example/note/1'] },
     });
     expect(first.ok).toBe(true);
     expect(first.body).toEqual({ topics: ['server.example/note/1', 'server.example/note/2'] });
 
     const again = await service.addSubscriptions({
-      ...buildRequest(cookie),
+      ...buildJsonRequest(cookie),
       body: { topics: ['server.example/note/1'] },
     });
     expect(again.body).toEqual({ topics: ['server.example/note/1', 'server.example/note/2'] });
@@ -189,7 +190,7 @@ describe('subscriptions', () => {
     const service = testService();
     const { cookie } = await session(service);
     const result = await service.addSubscriptions({
-      ...buildRequest(cookie),
+      ...buildJsonRequest(cookie),
       body: { topics: ['server.example/note/#', 'other.example/+/actor'] },
     });
 
@@ -204,14 +205,14 @@ describe('subscriptions', () => {
     const { cookie } = await session(service);
 
     const malformed = await service.addSubscriptions({
-      ...buildRequest(cookie),
+      ...buildJsonRequest(cookie),
       body: { topics: 'x' },
     });
     expect(malformed.ok).toBe(false);
     expect(malformed.status).toBe(400);
 
     const invalid = await service.addSubscriptions({
-      ...buildRequest(cookie),
+      ...buildJsonRequest(cookie),
       body: { topics: ['has space/inside'] },
     });
     expect(invalid.ok).toBe(false);
@@ -225,7 +226,7 @@ describe('subscriptions', () => {
     const cookie = ticketCookie(result.headers);
 
     const added = await service.addSubscriptions({
-      ...buildRequest(cookie),
+      ...buildJsonRequest(cookie),
       body: { topics: ['server.example/note/#'] },
     });
     expect(added.ok).toBe(false);
@@ -238,7 +239,7 @@ describe('subscriptions', () => {
     const cookie = ticketCookie(result.headers);
 
     const added = await service.addSubscriptions({
-      ...buildRequest(cookie),
+      ...buildJsonRequest(cookie),
       body: { topics: ['a/1', 'a/2', 'a/3'] },
     });
     expect(added.ok).toBe(false);
@@ -248,7 +249,10 @@ describe('subscriptions', () => {
   it('removes topics idempotently', async () => {
     const service = testService();
     const { cookie } = await session(service);
-    await service.addSubscriptions({ ...buildRequest(cookie), body: { topics: ['a/1', 'a/2'] } });
+    await service.addSubscriptions({
+      ...buildJsonRequest(cookie),
+      body: { topics: ['a/1', 'a/2'] },
+    });
 
     const removed = await service.removeSubscription({ ...buildRequest(cookie), topic: 'a/1' });
     expect(removed.status).toBe(204);
@@ -281,7 +285,7 @@ describe('subscriptions', () => {
     const cookie = ticketCookie(result.headers);
 
     const added = await service.addSubscriptions({
-      ...buildRequest(cookie),
+      ...buildJsonRequest(cookie),
       body: { topics: ['private/1'] },
     });
 
@@ -294,7 +298,7 @@ describe('subscriptions', () => {
   it('keeps principals isolated', async () => {
     const service = testService();
     const { cookie } = await session(service);
-    await service.addSubscriptions({ ...buildRequest(cookie), body: { topics: ['a/1'] } });
+    await service.addSubscriptions({ ...buildJsonRequest(cookie), body: { topics: ['a/1'] } });
 
     const others = await service.createSession(
       buildRequest(undefined, { principal: OTHER_PRINCIPAL }),
@@ -306,6 +310,180 @@ describe('subscriptions', () => {
     });
 
     expect(listed.body).toEqual({ topics: [] });
+  });
+
+  it('refuses an origin that is not on the allowlist', async () => {
+    const service = testService({ cors: { allowedOrigins: ['https://client.example'] } });
+    const { cookie } = await session(service);
+    const foreign = { origin: 'https://evil.example' };
+
+    const listed = await service.listSubscriptions(buildRequest(cookie, foreign));
+    expect(listed.ok).toBe(false);
+    expect(listed.status).toBe(403);
+    expect(listed.body).toMatchObject({ type: PROBLEM_TYPES.originNotAllowed });
+
+    const added = await service.addSubscriptions({
+      ...buildJsonRequest(cookie, foreign),
+      body: { topics: ['a/1'] },
+    });
+    expect(added.status).toBe(403);
+
+    const removed = await service.removeSubscription({
+      ...buildRequest(cookie, foreign),
+      topic: 'a/1',
+    });
+    expect(removed.status).toBe(403);
+
+    // Nothing the refused requests carried may reach the store.
+    const after = await service.listSubscriptions(
+      buildRequest(cookie, { origin: 'https://client.example' }),
+    );
+    expect(after.body).toEqual({ topics: [] });
+  });
+
+  it('serves an origin that is on the allowlist', async () => {
+    const service = testService({ cors: { allowedOrigins: ['https://client.example'] } });
+    const { cookie } = await session(service);
+    const allowed = { origin: 'https://client.example' };
+
+    const listed = await service.listSubscriptions(buildRequest(cookie, allowed));
+    expect(listed.ok).toBe(true);
+    expect(listed.headers['access-control-allow-origin']).toBe('https://client.example');
+
+    const added = await service.addSubscriptions({
+      ...buildJsonRequest(cookie, allowed),
+      body: { topics: ['a/1'] },
+    });
+    expect(added.ok).toBe(true);
+  });
+
+  it('answers 415 when the body is not application/json', async () => {
+    const service = testService();
+    const { cookie } = await session(service);
+
+    const wrongType = await service.addSubscriptions({
+      ...buildRequest(cookie, {
+        headers: { accept: 'text/event-stream', cookie, 'content-type': 'text/plain' },
+      }),
+      body: { topics: ['a/1'] },
+    });
+    expect(wrongType.ok).toBe(false);
+    expect(wrongType.status).toBe(415);
+    expect(wrongType.body).toMatchObject({ type: PROBLEM_TYPES.aboutBlank, status: 415 });
+
+    const absent = await service.addSubscriptions({
+      ...buildRequest(cookie),
+      body: { topics: ['a/1'] },
+    });
+    expect(absent.status).toBe(415);
+
+    const nearMiss = await service.addSubscriptions({
+      ...buildRequest(cookie, {
+        headers: { accept: 'text/event-stream', cookie, 'content-type': 'application/ld+json' },
+      }),
+      body: { topics: ['a/1'] },
+    });
+    expect(nearMiss.status).toBe(415);
+
+    // A refused body leaves the subscription set untouched.
+    const listed = await service.listSubscriptions(buildRequest(cookie));
+    expect(listed.body).toEqual({ topics: [] });
+  });
+
+  it('accepts a JSON content type with parameters, in any case', async () => {
+    const service = testService();
+    const { cookie } = await session(service);
+
+    const withParameters = await service.addSubscriptions({
+      ...buildRequest(cookie, {
+        headers: {
+          accept: 'text/event-stream',
+          cookie,
+          'content-type': 'application/json; charset=utf-8',
+        },
+      }),
+      body: { topics: ['a/1'] },
+    });
+    expect(withParameters.ok).toBe(true);
+
+    const upperCase = await service.addSubscriptions({
+      ...buildRequest(cookie, {
+        headers: { accept: 'text/event-stream', cookie, 'content-type': 'Application/JSON' },
+      }),
+      body: { topics: ['a/2'] },
+    });
+    expect(upperCase.ok).toBe(true);
+  });
+});
+
+describe('client-bound origins', () => {
+  const CLIENT = 'https://newclient.example';
+
+  it('trusts an origin the hook approves, without an allowlist entry', async () => {
+    const service = testService({ originTrust: (origin) => origin === CLIENT });
+    const issued = await service.createSession(buildRequest(undefined, { origin: CLIENT }));
+
+    expect(issued.ok).toBe(true);
+    expect(issued.headers['access-control-allow-origin']).toBe(CLIENT);
+    expect(issued.headers['access-control-allow-credentials']).toBe('true');
+  });
+
+  it('asks the hook only after the allowlist declines', async () => {
+    const asked: string[] = [];
+    const service = testService({
+      cors: { allowedOrigins: [CLIENT] },
+      originTrust: (origin) => {
+        asked.push(origin);
+        return false;
+      },
+    });
+
+    const result = await service.createSession(buildRequest(undefined, { origin: CLIENT }));
+    expect(result.ok).toBe(true);
+    expect(asked).toEqual([]);
+  });
+
+  it('opens the stream from the origin recorded with the ticket', async () => {
+    const service = testService({ originTrust: (origin) => origin === CLIENT });
+    const issued = await service.createSession(buildRequest(undefined, { origin: CLIENT }));
+    const cookie = ticketCookie(issued.headers);
+
+    const stream = await service.openStream(buildRequest(cookie, { origin: CLIENT }));
+    expect(stream.ok).toBe(true);
+    if (stream.ok) stream.close('client-disconnected');
+  });
+
+  it('refuses a stream from a different origin than the ticket', async () => {
+    const service = testService({ originTrust: () => true });
+    const issued = await service.createSession(buildRequest(undefined, { origin: CLIENT }));
+    const cookie = ticketCookie(issued.headers);
+
+    const stream = await service.openStream(
+      buildRequest(cookie, { origin: 'https://other.example' }),
+    );
+    expect(stream.ok).toBe(false);
+    if (stream.ok) return;
+    expect(stream.status).toBe(403);
+    expect(stream.body).toMatchObject({ type: PROBLEM_TYPES.originNotAllowed });
+  });
+
+  it('refuses a browser stream for a ticket issued without an origin', async () => {
+    const service = testService();
+    const issued = await service.createSession(buildRequest());
+    const cookie = ticketCookie(issued.headers);
+
+    const stream = await service.openStream(buildRequest(cookie, { origin: CLIENT }));
+    expect(stream.ok).toBe(false);
+  });
+
+  it('lets a non-browser client stream without an origin', async () => {
+    const service = testService();
+    const issued = await service.createSession(buildRequest());
+    const cookie = ticketCookie(issued.headers);
+
+    const stream = await service.openStream(buildRequest(cookie));
+    expect(stream.ok).toBe(true);
+    if (stream.ok) stream.close('client-disconnected');
   });
 });
 

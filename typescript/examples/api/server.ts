@@ -9,6 +9,7 @@
  * mechanism: it only receives a principal URI.
  */
 
+import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import {
@@ -47,7 +48,25 @@ export interface ApiServerOptions {
   readonly cookieSameSite?: SameSitePolicy;
   /** Demo credentials, `username → password`. Defaults to alice / demo. */
   readonly users?: Readonly<Record<string, string>>;
+  /**
+   * Clients that may ask for a token, each with the origin it registered. The
+   * first one defaults to the page origin; add another to try a client the
+   * API's allowlist has never heard of.
+   */
+  readonly clients?: readonly DemoClient[];
+  /**
+   * Serve with an empty allowlist: every browser origin is then trusted only
+   * through the token its client registered. This is the dynamic-client case,
+   * with nothing pre-configured on the server.
+   */
+  readonly clientOnly?: boolean;
   readonly log?: boolean;
+}
+
+export interface DemoClient {
+  readonly clientId: string;
+  /** The origin this client registered, and the one its requests must come from. */
+  readonly origin: string;
 }
 
 export interface ApiServer {
@@ -98,7 +117,10 @@ export function createApiServer(options: ApiServerOptions): ApiServer {
       },
     },
     heartbeatIntervalMs: options.heartbeatIntervalMs ?? 10_000,
-    cors: { allowedOrigins: options.webOrigins },
+    cors: { allowedOrigins: options.clientOnly === true ? [] : options.webOrigins },
+    // A client whose origin the allowlist does not name is trusted when its
+    // bearer token was issued to a client that registered that origin.
+    originTrust: (origin, request) => tokenFrom(request.headers)?.client.origin === origin,
     ...(options.log === true
       ? {
           logger: {
@@ -113,6 +135,40 @@ export function createApiServer(options: ApiServerOptions): ApiServer {
         }
       : {}),
   });
+
+  const clients = new Map<string, DemoClient>(
+    (
+      options.clients ?? [
+        { clientId: 'demo-page', origin: options.webOrigins[0] ?? 'http://localhost' },
+      ]
+    ).map((client) => [client.clientId, client]),
+  );
+
+  /**
+   * Bearer tokens, the stand-in for an OAuth 2.0 access token: they say which
+   * Principal is calling and which client (and origin) it was issued to.
+   */
+  interface DemoToken {
+    readonly principal: string;
+    readonly client: DemoClient;
+    readonly expiresAt: number;
+  }
+  const tokens = new Map<string, DemoToken>();
+  const TOKEN_TTL_SECONDS = 3600;
+
+  function tokenFrom(headers: Record<string, unknown>): DemoToken | undefined {
+    const raw = headers['authorization'];
+    const first: unknown = Array.isArray(raw) ? (raw as unknown[])[0] : raw;
+    if (typeof first !== 'string' || !/^Bearer /i.test(first)) return undefined;
+    const token = first.slice('Bearer '.length).trim();
+    const entry = tokens.get(token);
+    if (entry === undefined) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+      tokens.delete(token);
+      return undefined;
+    }
+    return entry;
+  }
 
   /**
    * The demo session cookie. It mirrors the ticket cookie's `SameSite`/`Secure`
@@ -141,8 +197,11 @@ export function createApiServer(options: ApiServerOptions): ApiServer {
 
   const actorFor = (username: string, origin: string) => `${origin}/users/${username}`;
 
-  /** Resolves the demo session cookie to a principal URI. */
+  /** Resolves a bearer token or the demo session cookie to a principal URI. */
   function principalOf(req: Request) {
+    const token = tokenFrom(req.headers);
+    if (token !== undefined) return token.principal;
+
     const username = parseCookieHeader(req.headers.cookie)[SESSION_COOKIE];
     if (username === undefined || users[username] === undefined) return undefined;
     return actorFor(username, originOf(req));
@@ -161,19 +220,36 @@ export function createApiServer(options: ApiServerOptions): ApiServer {
     };
   }
 
-  // CORS: exact origin, credentials, Vary
+  // The streaming endpoints answer CORS in the service, which knows both the
+  // allowlist and the client-bound origins. The demo's own endpoints stand in for
+  // an authorization server, so they answer whatever origin called.
   app.use((req, res, next) => {
-    const decision = service.cors(req.headers.origin);
-    if (!decision.allowed) {
-      sendProblem(res, 403, 'The request origin is not allowed', PROBLEM_TYPES.originNotAllowed);
-      return;
+    if (!req.path.startsWith('/sse/') && req.headers.origin !== undefined) {
+      res.setHeader('access-control-allow-origin', req.headers.origin);
+      res.setHeader('access-control-allow-credentials', 'true');
+      res.setHeader('vary', 'Origin');
     }
-    for (const [name, value] of Object.entries(decision.headers)) res.setHeader(name, value);
     next();
   });
 
   // Preflight for the JSON POSTs and the DELETE with a query string.
   app.options(/.*/, (req, res) => {
+    if (!req.path.startsWith('/sse/')) {
+      if (req.headers.origin !== undefined) {
+        res.setHeader('access-control-allow-origin', req.headers.origin);
+        res.setHeader('access-control-allow-credentials', 'true');
+        res.setHeader('vary', 'Origin');
+      }
+      res.setHeader('access-control-allow-methods', 'GET, POST, DELETE, OPTIONS');
+      res.setHeader(
+        'access-control-allow-headers',
+        req.headers['access-control-request-headers'] ?? 'authorization, content-type',
+      );
+      res.setHeader('access-control-max-age', '600');
+      res.status(204).end();
+      return;
+    }
+
     const result = service.preflight({
       ...(req.headers.origin === undefined ? {} : { origin: req.headers.origin }),
       ...(req.headers['access-control-request-method'] === undefined
@@ -198,6 +274,45 @@ export function createApiServer(options: ApiServerOptions): ApiServer {
 
     res.setHeader('set-cookie', sessionCookie(credentials.username));
     res.status(200).json({ actor: actorFor(credentials.username, originOf(req)) });
+  });
+
+  // Stand-in for an OAuth 2.0 token endpoint: the Principal is already signed in,
+  // and the token records which client asked, so the API can trust that client's
+  // registered origin without an allowlist entry.
+  app.post('/demo/token', (req, res) => {
+    const principal = principalOf(req);
+    if (principal === undefined) {
+      sendProblem(res, 401, 'Sign in first');
+      return;
+    }
+
+    const body = req.body as { client_id?: unknown };
+    const wanted = typeof body?.client_id === 'string' ? body.client_id : 'demo-page';
+
+    // Unknown client: register it now, with the origin it asked from. That is
+    // dynamic client registration in miniature, and the approval step is the
+    // sign-in that just happened.
+    let client = clients.get(wanted);
+    if (client === undefined) {
+      const origin = req.headers.origin;
+      if (origin === undefined) {
+        sendProblem(res, 400, `Client ${wanted} is unknown and the request carried no Origin`);
+        return;
+      }
+      client = { clientId: wanted, origin };
+      clients.set(wanted, client);
+      console.log(`[demo] registered client ${wanted} at ${origin}`);
+    }
+
+    const token = randomBytes(32).toString('base64url');
+    tokens.set(token, { principal, client, expiresAt: Date.now() + TOKEN_TTL_SECONDS * 1000 });
+    res.status(200).json({
+      access_token: token,
+      token_type: 'Bearer',
+      expires_in: TOKEN_TTL_SECONDS,
+      client_id: client.clientId,
+      origin: client.origin,
+    });
   });
 
   app.post('/demo/logout', (_req, res) => {

@@ -21,6 +21,7 @@ import {
 import {
   evaluateCors,
   preflightHeaders,
+  trustedOriginHeaders,
   type CorsDecision,
   type PreflightRequest,
 } from './cors.js';
@@ -154,8 +155,33 @@ export function createStreamingService(options: StreamingServiceOptions = {}): S
     };
   }
 
-  function corsFor(origin: string | undefined) {
-    return evaluateCors(origin, resolved.cors).headers;
+  /**
+   * CORS headers when the request's origin is trusted, `undefined` when it is not.
+   * The allowlist answers first; `originTrust` covers origins the server cannot
+   * know in advance.
+   */
+  async function corsHeaders(
+    request: AuthenticatedRequest,
+    ticketOrigin?: string,
+  ): Promise<HttpHeaders | undefined> {
+    const origin = request.origin;
+    if (origin === undefined || origin === '') return {};
+    const decision = evaluateCors(origin, resolved.cors);
+
+    // The stream request carries no credential of its own, so the ticket is the
+    // evidence: an origin the ticket was issued to is trusted.
+    if (ticketOrigin !== undefined && originMatchesTicket(origin, ticketOrigin)) {
+      return trustedOriginHeaders(origin, resolved.cors);
+    }
+
+    // No hook: the allowlist is the whole answer, and no policy means no check.
+    if (resolved.originTrust === undefined) {
+      return decision.allowed ? decision.headers : undefined;
+    }
+    // An allowlisted origin short-circuits; everything else goes to the hook.
+    if (decision.allowed && resolved.cors !== undefined) return decision.headers;
+    if (!(await resolved.originTrust(origin, request))) return undefined;
+    return trustedOriginHeaders(origin, resolved.cors);
   }
 
   function ticketFromCookie(request: AuthenticatedRequest) {
@@ -166,8 +192,8 @@ export function createStreamingService(options: StreamingServiceOptions = {}): S
 
   async function requireTicket(
     request: AuthenticatedRequest,
+    cors: HttpHeaders,
   ): Promise<{ ok: true; ticket: string } | { ok: false; failure: ServiceFailure }> {
-    const cors = corsFor(request.origin);
     const ticket = ticketFromCookie(request);
     if (ticket === undefined) {
       return {
@@ -300,9 +326,9 @@ export function createStreamingService(options: StreamingServiceOptions = {}): S
     subscriptionStore,
 
     async createSession(request: AuthenticatedRequest): Promise<ServiceResult<CreateSessionBody>> {
-      const cors = corsFor(request.origin);
-      if (!evaluateCors(request.origin, resolved.cors).allowed) {
-        return fail(403, PROBLEM_TYPES.originNotAllowed, 'The request origin is not allowed', cors);
+      const cors = await corsHeaders(request);
+      if (cors === undefined) {
+        return fail(403, PROBLEM_TYPES.originNotAllowed, 'The request origin is not allowed');
       }
 
       const origin = resolveOrigin(request);
@@ -371,9 +397,9 @@ export function createStreamingService(options: StreamingServiceOptions = {}): S
     },
 
     async revokeSession(request: AuthenticatedRequest): Promise<ServiceResult<null>> {
-      const cors = corsFor(request.origin);
-      if (!evaluateCors(request.origin, resolved.cors).allowed) {
-        return fail(403, PROBLEM_TYPES.originNotAllowed, 'The request origin is not allowed', cors);
+      const cors = await corsHeaders(request);
+      if (cors === undefined) {
+        return fail(403, PROBLEM_TYPES.originNotAllowed, 'The request origin is not allowed');
       }
 
       const ticket = ticketFromCookie(request);
@@ -395,8 +421,11 @@ export function createStreamingService(options: StreamingServiceOptions = {}): S
     },
 
     async listSubscriptions(request: AuthenticatedRequest): Promise<ServiceResult<TopicsBody>> {
-      const cors = corsFor(request.origin);
-      const guard = await requireTicket(request);
+      const cors = await corsHeaders(request);
+      if (cors === undefined) {
+        return fail(403, PROBLEM_TYPES.originNotAllowed, 'The request origin is not allowed');
+      }
+      const guard = await requireTicket(request, cors);
       if (!guard.ok) return { ...guard.failure, headers: { ...guard.failure.headers, ...cors } };
 
       const topics = await subscriptionStore.list(request.principal);
@@ -406,9 +435,21 @@ export function createStreamingService(options: StreamingServiceOptions = {}): S
     async addSubscriptions(
       request: AuthenticatedRequest & { readonly body: unknown },
     ): Promise<ServiceResult<TopicsBody>> {
-      const cors = corsFor(request.origin);
-      const guard = await requireTicket(request);
+      const cors = await corsHeaders(request);
+      if (cors === undefined) {
+        return fail(403, PROBLEM_TYPES.originNotAllowed, 'The request origin is not allowed');
+      }
+      const guard = await requireTicket(request, cors);
       if (!guard.ok) return { ...guard.failure, headers: { ...guard.failure.headers, ...cors } };
+
+      if (!isJsonBody(request.headers)) {
+        return fail(
+          415,
+          PROBLEM_TYPES.aboutBlank,
+          'The request body must be sent as application/json',
+          cors,
+        );
+      }
 
       const requested = parseTopics(request.body);
       if (requested === undefined) {
@@ -466,8 +507,11 @@ export function createStreamingService(options: StreamingServiceOptions = {}): S
     async removeSubscription(
       request: AuthenticatedRequest & { readonly topic: string | undefined },
     ): Promise<ServiceResult<null>> {
-      const cors = corsFor(request.origin);
-      const guard = await requireTicket(request);
+      const cors = await corsHeaders(request);
+      if (cors === undefined) {
+        return fail(403, PROBLEM_TYPES.originNotAllowed, 'The request origin is not allowed');
+      }
+      const guard = await requireTicket(request, cors);
       if (!guard.ok) return { ...guard.failure, headers: { ...guard.failure.headers, ...cors } };
 
       if (request.topic === undefined) {
@@ -488,10 +532,14 @@ export function createStreamingService(options: StreamingServiceOptions = {}): S
     },
 
     async openStream(request: AuthenticatedRequest): Promise<StreamResult> {
-      const decision = evaluateCors(request.origin, resolved.cors);
-      if (!decision.allowed) {
+      const ticket = ticketFromCookie(request);
+      const record = ticket === undefined ? null : await ticketStore.read(ticket);
+
+      const cors = await corsHeaders(request, record?.origin);
+      if (cors === undefined) {
         return streamFail(403, PROBLEM_TYPES.originNotAllowed, 'The request origin is not allowed');
       }
+      const decision = { headers: cors };
 
       if (!acceptsEventStream(request.headers)) {
         return streamFail(
@@ -502,7 +550,6 @@ export function createStreamingService(options: StreamingServiceOptions = {}): S
         );
       }
 
-      const ticket = ticketFromCookie(request);
       if (ticket === undefined) {
         return streamFail(
           401,
@@ -512,7 +559,6 @@ export function createStreamingService(options: StreamingServiceOptions = {}): S
         );
       }
 
-      const record = await ticketStore.read(ticket);
       if (record === null) {
         return streamFail(
           401,
@@ -526,6 +572,14 @@ export function createStreamingService(options: StreamingServiceOptions = {}): S
           401,
           PROBLEM_TYPES.invalidTicket,
           'The streaming ticket was issued to a different principal',
+          decision.headers,
+        );
+      }
+      if (!originMatchesTicket(request.origin, record.origin)) {
+        return streamFail(
+          403,
+          PROBLEM_TYPES.originNotAllowed,
+          'The request origin does not match the origin recorded with the ticket',
           decision.headers,
         );
       }
@@ -646,10 +700,28 @@ export function createStreamingService(options: StreamingServiceOptions = {}): S
 
     preflight(request: PreflightRequest = {}): ServiceResult<null> {
       const decision = evaluateCors(request.origin, resolved.cors);
-      if (!decision.allowed) {
+      // An adapter that already ran `originTrust` passes the answer, so a
+      // client-bound origin gets the same preflight headers as an allowlisted one.
+      let headers: HttpHeaders;
+      if (decision.allowed) {
+        headers = decision.headers;
+      } else if (resolved.originTrust !== undefined && request.origin !== undefined) {
+        // A preflight never carries the credential, so it cannot know whether the
+        // origin is bound to a client. Answer it, and let the real request decide:
+        // granting a preflight executes nothing.
+        headers = trustedOriginHeaders(request.origin, resolved.cors);
+      } else {
         return fail(403, PROBLEM_TYPES.originNotAllowed, 'The request origin is not allowed');
       }
-      return ok(204, null, preflightHeaders(decision, resolved.cors, request));
+      return ok(
+        204,
+        null,
+        preflightHeaders(
+          { allowed: true, origin: request.origin, headers },
+          resolved.cors,
+          request,
+        ),
+      );
     },
 
     cors(origin?: string): CorsDecision {
@@ -752,6 +824,7 @@ function resolveOptions(options: StreamingServiceOptions): ResolvedStreamingServ
     sessionRateLimit,
     authorizeTopic: options.topics?.authorize,
     cors: options.cors,
+    originTrust: options.originTrust,
   };
 }
 
@@ -770,6 +843,29 @@ function acceptsEventStream(headers: HeadersLike) {
     const media = (range.split(';')[0] ?? '').trim().toLowerCase();
     return media === 'text/event-stream';
   });
+}
+
+/**
+ * The subscriptions endpoint takes a JSON body and nothing else; the spec answers
+ * any other media type with `415`.
+ */
+function isJsonBody(headers: HeadersLike) {
+  const contentType = readHeader(headers, 'content-type');
+  if (contentType === undefined) return false;
+
+  const media = (contentType.split(';')[0] ?? '').trim().toLowerCase();
+  return media === 'application/json';
+}
+
+/**
+ * The stream request has to come from the origin the ticket was issued to, when
+ * it names one. A request without an `Origin` is a non-browser client; one that
+ * names an origin a ticket never recorded is refused.
+ */
+function originMatchesTicket(requestOrigin: string | undefined, ticketOrigin: string | undefined) {
+  if (requestOrigin === undefined || requestOrigin === '') return true;
+  if (ticketOrigin === undefined) return false;
+  return normalizeOrigin(requestOrigin) === normalizeOrigin(ticketOrigin);
 }
 
 function normalizePath(path: string) {

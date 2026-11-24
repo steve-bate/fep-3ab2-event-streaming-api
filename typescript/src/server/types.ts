@@ -146,10 +146,25 @@ export interface StreamingServiceOptions {
   readonly queueLimit?: number;
   /** Strict CORS allowlist; omit for same-origin-only deployments. */
   readonly cors?: CorsPolicy;
+  /**
+   * Answers for origins the allowlist does not name, such as the origin a client
+   * registered before a Principal approved it. Runs only after the allowlist
+   * declines, and only when the request carried an `Origin`.
+   */
+  readonly originTrust?: OriginTrust;
   readonly ticketStore?: TicketStore;
   readonly subscriptionStore?: SubscriptionStore;
   readonly logger?: StreamingLogger;
 }
+
+/**
+ * Whether an `Origin` the allowlist does not name may call the API: the
+ * client-bound path from the Deployment Origins section.
+ */
+export type OriginTrust = (
+  origin: string,
+  request: AuthenticatedRequest,
+) => boolean | Promise<boolean>;
 
 export interface ResolvedStreamingServiceOptions {
   readonly publicOrigin: string | undefined;
@@ -165,4 +180,5 @@ export interface ResolvedStreamingServiceOptions {
   readonly sessionRateLimit: SessionRateLimit | undefined;
   readonly authorizeTopic: TopicAuthorization | undefined;
   readonly cors: CorsPolicy | undefined;
+  readonly originTrust: OriginTrust | undefined;
 }

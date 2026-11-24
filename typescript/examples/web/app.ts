@@ -15,12 +15,18 @@ import {
 } from '@fep-3ab2/streaming/client';
 import { topicFromUri } from '@fep-3ab2/streaming/topics';
 
-const metaApiOrigin = document.querySelector<HTMLMetaElement>('meta[name="api-origin"]')?.content;
-const apiOrigin = (
+/** What the server's configuration advertises; the field on the page starts here. */
+const defaultApiOrigin = (
   new URLSearchParams(location.search).get('api') ??
-  metaApiOrigin ??
+  document.querySelector<HTMLMetaElement>('meta[name="api-origin"]')?.content ??
   `${location.protocol}//${location.hostname}:5181`
 ).replace(/\/+$/, '');
+
+/**
+ * The server the page talks to. Editable, so the same page can drive a different
+ * API without a rebuild; empty means "this origin", for the single-origin mode.
+ */
+let apiOrigin = defaultApiOrigin;
 
 function element(id: string): HTMLElement {
   const found = document.getElementById(id);
@@ -34,6 +40,7 @@ const list = (id: string) => element(id) as HTMLUListElement;
 
 const ui = {
   pageOrigin: element('page-origin'),
+  serverUrl: input('server-url'),
   apiOrigin: element('api-origin'),
   username: input('username'),
   password: input('password'),
@@ -61,7 +68,17 @@ const ui = {
 };
 
 ui.pageOrigin.textContent = location.origin;
-ui.apiOrigin.textContent = apiOrigin;
+ui.serverUrl.value = defaultApiOrigin;
+ui.apiOrigin.textContent = apiOrigin === '' ? '(same origin)' : apiOrigin;
+
+/** Reads the field, normalises it, and repaints the header line. */
+function useServerUrl() {
+  apiOrigin = ui.serverUrl.value.trim().replace(/\/+$/, '');
+  ui.apiOrigin.textContent = apiOrigin === '' ? '(same origin)' : apiOrigin;
+  if (client !== undefined) log('server URL changed — disconnect and reconnect to use it');
+}
+
+ui.serverUrl.addEventListener('change', useServerUrl);
 
 let actorUri: string | undefined;
 let client: StreamingClient | undefined;
@@ -88,7 +105,7 @@ function setBadge(badge: HTMLElement, text: string, state: string) {
   badge.className = `badge ${state}`;
 }
 
-const apiLabel = apiOrigin === '' ? '(same origin)' : apiOrigin;
+const apiLabel = () => (apiOrigin === '' ? '(same origin)' : apiOrigin);
 
 async function request(path: string, init: RequestInit = {}) {
   try {
@@ -190,7 +207,11 @@ function renderState(state: StreamingClientState) {
 
 // actions
 
+/** Bearer token for the control API; the ticket cookie still carries the stream. */
+let accessToken: string | undefined;
+
 async function signIn() {
+  accessToken = undefined;
   ui.login.disabled = true;
   try {
     const credentials = btoa(`${ui.username.value}:${ui.password.value}`);
@@ -205,6 +226,21 @@ async function signIn() {
     actorUri = payload.actor;
     ui.topic.value = inboxTopicOf(actorUri);
 
+    // Stand-in for an OAuth 2.0 token: the session cookie proves who signed in,
+    // the token says which client is calling and from which origin.
+    const tokenResponse = await requireOk(
+      await request('/demo/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        // The page names itself; the server registers that client at the origin
+        // this request came from, so no allowlist entry is needed for it.
+        body: JSON.stringify({ client_id: location.host }),
+      }),
+    );
+    const issued = (await tokenResponse.json()) as { access_token: string; origin: string };
+    accessToken = issued.access_token;
+
+    ui.login.textContent = 'Sign out';
     setBadge(ui.authBadge, 'signed in', 'open');
     renderState('idle');
     log(`signed in as ${actorUri}`);
@@ -216,6 +252,28 @@ async function signIn() {
       : '';
     log(`sign-in failed: ${detail}${hint}`);
   } finally {
+    ui.login.disabled = false;
+  }
+}
+
+/**
+ * Signs out: the session is revoked (which clears the ticket cookie on the
+ * server), then the demo session cookie is dropped.
+ */
+async function signOut() {
+  ui.login.disabled = true;
+  try {
+    await disconnect();
+    await requireOk(await request('/demo/logout', { method: 'POST' }));
+    log('signed out; ticket and session cookie revoked');
+  } catch (error) {
+    log(`sign-out failed: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    actorUri = undefined;
+    accessToken = undefined;
+    ui.login.textContent = 'Sign in';
+    setBadge(ui.authBadge, 'signed out', 'idle');
+    renderState('idle');
     ui.login.disabled = false;
   }
 }
@@ -232,6 +290,7 @@ async function connect() {
     const streamingClient = new StreamingClient({
       streamingControl,
       topics: [inboxTopicOf(demoActor())],
+      ...(accessToken === undefined ? {} : { headers: { authorization: `Bearer ${accessToken}` } }),
     });
     client = streamingClient;
 
@@ -500,7 +559,7 @@ function noteCard(note: TimelineNote): HTMLElement {
 // wiring
 
 ui.login.addEventListener('click', () => {
-  void signIn();
+  void (actorUri === undefined ? signIn() : signOut());
 });
 ui.connect.addEventListener('click', () => {
   void connect();
@@ -546,5 +605,5 @@ if (location.protocol === 'file:') {
     'this page must be served by the demo web server: run `npm run example` and open http://localhost:5180',
   );
 } else {
-  log(`ready — sign in, then connect (API: ${apiLabel})`);
+  log(`ready — sign in, then connect (API: ${apiLabel()})`);
 }

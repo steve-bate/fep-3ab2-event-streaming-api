@@ -29,6 +29,11 @@ export interface PreflightRequest {
   readonly origin?: string;
   readonly requestMethod?: string;
   readonly requestHeaders?: string;
+  /**
+   * Set by an adapter that has already approved an origin its policy does not
+   * name, so the preflight answers the same way the real request will.
+   */
+  readonly trusted?: boolean;
 }
 
 /**
@@ -50,15 +55,23 @@ export function evaluateCors(
     return { allowed: false, origin, headers: {} };
   }
 
+  return { allowed: true, origin, headers: trustedOriginHeaders(origin, policy) };
+}
+
+/**
+ * The headers a trusted origin gets. `evaluateCors` uses it for allowlisted
+ * origins; a service with an `originTrust` hook uses it for the origins that hook
+ * approves, so both paths answer the same way.
+ */
+export function trustedOriginHeaders(origin: string, policy: CorsPolicy | undefined): HttpHeaders {
   const headers: HttpHeaders = {
     'access-control-allow-origin': origin,
     vary: 'Origin',
   };
-  if (policy.allowCredentials ?? true) {
+  if (policy?.allowCredentials ?? true) {
     headers['access-control-allow-credentials'] = 'true';
   }
-
-  return { allowed: true, origin, headers };
+  return headers;
 }
 
 export function preflightHeaders(
